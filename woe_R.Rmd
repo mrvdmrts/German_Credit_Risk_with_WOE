@@ -1,0 +1,196 @@
+```{r}
+library(tidyverse)
+# Packages for loading data
+library(httr)
+# Packages for data manipulation
+library(purrr)
+# Packages for visualisation
+library(Information)
+library(gmodels)
+library(DataExplorer)
+# Packages for modeling
+library(pROC)
+library(scorecard)
+library(dplyr)
+
+```
+```{r}
+creditdata <- read.csv("C:/Users/user/Downloads/german_credit_data.csv")
+
+```
+```{r}
+head(creditdata)
+
+```
+```{r}
+creditdata <- select(creditdata, -c('X'))
+names(creditdata)
+```
+```{r}
+str(creditdata)
+```
+
+
+
+```{r}
+# Change the numerical variables to numeric using map_at function from purrr R package
+creditdata <- creditdata %>% 
+      mutate_at(vars(Duration,Credit.amount,Age,Job),as.numeric) %>% 
+      data.frame(stringsAsFactors = FALSE)
+
+# Convert remaining integer variables to character ie categorical variables using map_if function from purrr R package
+creditdata <- creditdata %>% 
+      map_if(is.integer,as.character) %>% 
+      data.frame() # leave as factors with default argument
+
+# Rename the Risk variable to lower case for naming consistency
+names(creditdata) <- tolower(names(creditdata))
+
+```
+
+```{r}
+
+#Converting the ‘Creditability’ (default flag) variable into numeric type
+creditdata$risk <- ifelse(creditdata$risk == "bad",0,1)
+
+```
+
+```{r}
+plot_missing(creditdata)
+
+```
+
+
+```{r}
+# Barplot of categorical features using DataExplorer.
+creditdata %>%
+      plot_bar()
+```
+```{r}
+# Create a new age_group variable, with buckets based on the density distribution above
+creditdata <- creditdata %>% 
+  mutate(age_group=factor(case_when(
+  .$age <  25 ~ "25less",
+  .$age >= 25 & .$age <= 29 ~ "25to29",
+  .$age >= 30 & .$age <= 39 ~ "30to39",
+  .$age >= 40 & .$age <= 49 ~ "40to49",
+  .$age >= 50 & .$age <= 59 ~ "50to59",
+  .$age >= 60 & .$age <= 70 ~ "60over",
+  .$age >= 70 ~ "6")))
+# Remove the original age variable to avoid feature interactions
+creditdata <- creditdata %>% 
+      dplyr::select(-age)
+```
+```{r}
+# Create a new amount_group variable, with buckets based on the density distribution above
+creditdata <- creditdata %>% 
+  mutate(amount_group=factor(case_when(
+  .$credit.amount <  1250 ~ "1250less",
+  .$credit.amount >= 1250 & .$credit.amount <= 5000 ~ "1250to5000",
+  .$credit.amount >= 5000  ~ "5000over")))
+# Remove the original amount variable to avoid feature interactions
+creditdata <- creditdata %>% 
+      dplyr::select(-credit.amount)
+```
+
+```{r}
+# Create a new  duration_group variable, with buckets based on the density distribution above. We will group the months into years, we see peaks at the incremental 12 month marks
+creditdata <- creditdata %>% 
+  mutate(duration_group=factor(case_when(
+  .$ duration <  12 ~ "1yearunder",
+  .$ duration >= 12 & .$ duration <= 24 ~ "1to2year",
+  .$ duration >= 24 & .$ duration <= 36 ~ "2to3year",
+  .$ duration >= 36 & .$ duration <= 48 ~ "3to4year",
+  .$ duration >= 48  ~ "4yearover")))
+# Remove the original  duration variable to avoid feature interactions
+creditdata <- creditdata %>% 
+      dplyr::select(- duration)
+```
+
+```{r}
+# Set seed of 123 for reproduceability
+set.seed(123)
+# Store row numbers for training set: index_train using randomly assigned observations
+index_train <- sample(1:nrow(creditdata), 0.7 * nrow(creditdata))
+# Create training set: training with the index
+training <- creditdata[index_train, ]
+# Create test set: test with the index
+test <- creditdata[-index_train, ]
+
+# Store row numbers for training set: index_train using randomly assigned observations
+index_train_base <- sample(1:nrow(creditdata_base), 0.7 * nrow(creditdata_base))
+# Create training set: training with the index
+training_base <- creditdata_base[index_train_base, ]
+# Create test set: test with the index
+test_base <- creditdata_base[-index_train_base, ]
+```
+
+
+```{r}
+# Create a WOE table
+IV <- create_infotables(data=creditdata_base,
+                        y="risk")
+# Print the summary of the IV table information values. Thes IVs are derived from the WOE.
+IV$Summary %>% 
+      knitr::kable()
+```
+```{r}
+# Filter out variables via missing rate, information value, identical value rate
+creditdata_filt <- var_filter(creditdata_base, y="risk")
+# Print the remaining number variables of the filtered dataset
+dim(creditdata_filt)[2]
+```
+
+
+```{r}
+bins <- woebin(creditdata_filt, y="risk")
+
+```
+```{r}
+woebin_plot(bins)
+
+```
+```{r}
+# Convert train and test sets original input data to WOE values based on WOE binning 
+training_woe <- woebin_ply(training_base, bins)
+test_woe <- woebin_ply(test_base, bins)
+
+```
+```{r}
+glm_model <- glm(risk ~ ., family = "binomial", data = training_woe)
+
+```
+
+```{r}
+prediction_prob <- predict(glm_model, newdata = test_woe, type = "response")
+# Calculate the ROC
+ROC <- pROC::roc(test_woe$risk,prediction_prob)
+# AUC for fourth model
+AUC <- auc(ROC)
+AUC
+```
+```{r}
+# KS for fourth model
+prediction <- ROCR::prediction(prediction_prob,test_woe$risk)
+perf <- ROCR::performance(prediction,"tpr","fpr")
+KS <- max(attr(perf,'y.values')[[1]]-attr(perf,'x.values')[[1]])
+KS
+```
+
+```{r}
+# Calculate score card
+card <- scorecard(bins, glm_model)
+# Take a look at the scorecard for duration, which includes scorecard points
+card$duration %>% 
+      knitr::kable()
+```
+
+```{r}
+card$age %>% 
+      knitr::kable()
+```
+```{r}
+card$housing %>% 
+      knitr::kable()
+```
+
